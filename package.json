@@ -1,0 +1,11 @@
+{
+  "name": "task-management",
+  "version": "1.0.0",
+  "description": "Task Management App with Node.js REST API & PostgreSQL",
+  "scripts": {
+    "start:backend": "cd backend && npm start",
+    "dev:backend": "cd backend && npm run dev",
+    "start:frontend": "npx serve frontend",
+    "dev:frontend": "npx serve frontend"
+  }
+}
