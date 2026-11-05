@@ -7,6 +7,8 @@ backend/node_modules/
 backend/.env
 frontend/.env
 *.env.local
+.env.example
+
 
 # Logs
 *.log
