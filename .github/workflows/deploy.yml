@@ -72,7 +72,7 @@ jobs:
           username: ${{ secrets.TASK_MACHINE_USER }}
           key: ${{ secrets.TASK_MACHINE_SSH_KEY }}
           script: |
-            cd /home/ubuntu/taskapp
+            cd /var/www/taskapp
             git pull origin main
             docker compose down
             docker compose up -d --build
