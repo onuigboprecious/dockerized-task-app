@@ -50,7 +50,7 @@ jobs:
       - name: Build Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./frontend
           file: frontend/Dockerfile
           push: false # Set to true if you are pushing to a registry
           tags: taskapp-frontend:${{ github.run_id }},taskapp-frontend:latest
