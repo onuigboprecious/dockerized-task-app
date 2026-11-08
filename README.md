@@ -1,6 +1,6 @@
 # 📋 Task Management System
 
-A full-stack task management application with a **Node.js & Express REST API**, **PostgreSQL** database persistence, and a **modern, responsive frontend**.
+A production-ready, full-stack task management application with a **Node.js & Express REST API**, **PostgreSQL** database persistence, a **modern, responsive frontend**, and automated **CI/CD deployment via GitHub Actions**.
 
 ---
 
@@ -8,13 +8,17 @@ A full-stack task management application with a **Node.js & Express REST API**, 
 
 ```text
 task-management/
+├── .github/
+│   └── workflows/
+│       └── deploy.yml          # CI/CD: automated test, image build & SSH deployment
 ├── frontend/
 │   ├── css/
 │   │   └── styles.css          # Modern dark/glassmorphic styling
 │   ├── js/
-│   │   ├── api.js              # API client with offline/demo fallback
+│   │   ├── api.js              # Dynamic API client with offline/demo fallback
 │   │   └── app.js              # UI controller, filtering & dialog logic
 │   ├── Dockerfile              # Lightweight Nginx container for web UI
+│   ├── nginx.conf              # Nginx reverse proxy configuration for /api
 │   ├── .dockerignore
 │   └── index.html              # Responsive dashboard with native <dialog>
 ├── backend/
@@ -34,10 +38,41 @@ task-management/
 ├── database/
 │   └── init.sql                # Table schema, indexes, trigger & seed data
 ├── docker-compose.yml          # Multi-container orchestration (db, backend, frontend)
-├── .env.example                # Root environment template
 ├── package.json                # Root convenience runner scripts
 └── README.md
 ```
+
+---
+
+## 🚀 Architecture & Networking
+
+```text
+  Browser (Client)
+    │
+    │  HTTP :3000 (UI & /api proxy)  OR  HTTP :5000 (/api direct)
+    ▼
+┌───────────────────────── task-network (Docker) ─────────────────────────┐
+│                                                                         │
+│   ┌────────────────────┐                   ┌────────────────────────┐  │
+│   │  task-frontend     │  proxy /api/ ->   │  task-backend          │  │
+│   │  (Nginx :80)       ├──────────────────►│  (Node.js Express :5000│  │
+│   │  Exposed on :3000  │                   │  Exposed on :5000      │  │
+│   └────────────────────┘                   └───────────┬────────────┘  │
+│                                                        │                │
+│                                            PostgreSQL  │ :5432          │
+│                                                        ▼                │
+│                                            ┌────────────────────────┐  │
+│                                            │  task-db               │  │
+│                                            │  (Postgres 16 :5432)   │  │
+│                                            │  Exposed on :5433      │  │
+│                                            └────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Dynamic Backend Detection & Nginx Reverse Proxy
+- **Zero-config Dynamic Resolution**: In `frontend/js/api.js`, the API base URL is resolved dynamically via `window.location.hostname`. Whether you visit `http://localhost:3000`, `http://102.37.146.13:3000`, or a custom domain, the frontend automatically routes API requests to the matching backend.
+- **Nginx Reverse Proxy**: `frontend/nginx.conf` proxies `/api/` directly to `http://backend:5000/api/` inside Docker's internal network. This guarantees that API calls succeed on port 3000 even if port 5000 is blocked by cloud firewall rules (e.g. AWS Security Groups, UFW).
+- **Graceful Fallback**: If the backend is disconnected, the frontend automatically enters **Demo Mode** with interactive local storage.
 
 ---
 
@@ -62,12 +97,15 @@ docker compose logs -f
 
 # View backend logs only
 docker compose logs -f backend
+
+# View frontend / Nginx access logs
+docker compose logs -f frontend
 ```
 
 ### 4. Access the Applications
 | Service | URL / Port | Details |
 | :--- | :--- | :--- |
-| **Frontend Web UI** | [http://localhost:3000](http://localhost:3000) | Nginx serving the TaskFlow dashboard |
+| **Frontend Web UI** | [http://localhost:3000](http://localhost:3000) | Nginx serving the TaskFlow dashboard with `/api` reverse proxy |
 | **Backend REST API** | [http://localhost:5000/api](http://localhost:5000/api) | Express REST API |
 | **API Health Check** | [http://localhost:5000/api/health](http://localhost:5000/api/health) | Service & DB status |
 | **PostgreSQL Database** | `localhost:5433` (Internal: `5432`) | User: `postgres`, DB: `taskdb` |
@@ -86,26 +124,55 @@ docker compose down -v
 
 ---
 
+## 🤖 CI/CD Pipeline (GitHub Actions)
+
+The repository includes an automated CI/CD pipeline defined in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
+
+### Workflow Stages:
+1. **`test-backend`**:
+   - Sets up Node.js 18.
+   - Installs backend dependencies (`npm ci`).
+   - Runs unit tests (`npm test`).
+2. **`build-frontend`**:
+   - Uses Docker Buildx.
+   - Builds the production frontend Nginx container image with `context: ./frontend`.
+3. **`deploy`**:
+   - Connects to your remote deployment server over SSH via `appleboy/ssh-action`.
+   - Navigates to `/var/www/taskapp`.
+   - Pulls the latest changes from `main`.
+   - Runs `docker compose down && docker compose up -d --build`.
+   - Verifies container health with `docker compose ps`.
+
+### Required GitHub Repository Secrets:
+To configure the deployment step, set these secrets in your GitHub repository (**Settings** > **Secrets and variables** > **Actions**):
+- `TASK_MACHINE_HOST`: Server IP address or hostname (e.g. `102.37.146.13`).
+- `TASK_MACHINE_USER`: SSH username (e.g. `ubuntu` or `root`).
+- `TASK_MACHINE_SSH_KEY`: Private SSH key authorized on the server.
+
+---
+
 ## 📦 Running Individual Docker Containers
 
 If you prefer building and running each container manually:
 
 ### 1. Build the Images
 ```bash
-# Backend (from task-management/backend/)
-cd backend
-docker build -t task-backend .
+# Backend
+docker build -t task-backend ./backend
 
-# Frontend (from task-management/frontend/)
-cd ../frontend
-docker build -t task-frontend .
+# Frontend
+docker build -t task-frontend ./frontend
 ```
 
 ### 2. Run the Containers
 ```bash
+# Create shared internal bridge network
+docker network create task-network
+
 # Start PostgreSQL Database
 docker run -d \
   --name task-db \
+  --network task-network \
   -p 5433:5432 \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
@@ -116,10 +183,11 @@ docker run -d \
 
 # Start Backend API
 docker run -d \
-  --name task-backend-app \
+  --name task-backend \
+  --network task-network \
   -p 5000:5000 \
-  -e DB_HOST=host.docker.internal \
-  -e DB_PORT=5433 \
+  -e DB_HOST=task-db \
+  -e DB_PORT=5432 \
   -e DB_USER=postgres \
   -e DB_PASSWORD=postgres \
   -e DB_NAME=taskdb \
@@ -127,7 +195,8 @@ docker run -d \
 
 # Start Frontend
 docker run -d \
-  --name task-frontend-app \
+  --name task-frontend \
+  --network task-network \
   -p 3000:80 \
   task-frontend
 ```
@@ -143,7 +212,6 @@ Ensure PostgreSQL is running locally:
   ```bash
   psql -U postgres -d taskdb -f database/init.sql
   ```
-*(Note: The backend also contains auto-initialization code that creates the `tasks` table on startup if it doesn't exist).*
 
 ### 2. Backend Setup
 ```bash
@@ -158,7 +226,8 @@ The API will start on **`http://localhost:5000`**.
 ### 3. Frontend Setup
 From the project root:
 ```bash
-npx serve frontend
+npm run dev:frontend
+# or: npx serve frontend
 ```
 Or open [frontend/index.html](file:///home/onuigbo-precious/task-management/frontend/index.html) directly in any web browser.
 
@@ -166,7 +235,7 @@ Or open [frontend/index.html](file:///home/onuigbo-precious/task-management/fron
 
 ## 📡 REST API Documentation
 
-### Base URL: `http://localhost:5000/api`
+### Base URL: `/api` (or `http://localhost:5000/api`)
 
 | Method | Endpoint | Description | Query / Body Parameters |
 | :--- | :--- | :--- | :--- |
@@ -197,14 +266,19 @@ Or open [frontend/index.html](file:///home/onuigbo-precious/task-management/fron
 
 ## 🛠️ Common Troubleshooting
 
-### 1. `permission denied while trying to connect to the docker API`
+### 1. UI Shows "Demo Mode (Backend Offline)"
+- **Check Backend Container Status:** Run `docker compose ps` to ensure `task-backend` and `task-db` are running and healthy.
+- **Inspect Backend Logs:** Run `docker compose logs backend` to confirm the backend is successfully connected to PostgreSQL.
+- **Firewall:** If accessing remotely, make sure port 3000 (and optionally port 5000) is open in your cloud firewall / security group. With the Nginx reverse proxy now in place, frontend requests to `/api` work through port 3000 automatically.
+
+### 2. `permission denied while trying to connect to the docker API`
 Fix by adding your Linux user to the `docker` group:
 ```bash
 sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-### 2. `listen tcp 0.0.0.0:5000: bind: address already in use`
+### 3. `listen tcp 0.0.0.0:5000: bind: address already in use`
 A local Node.js process is occupying port 5000. Stop it with:
 ```bash
 npx kill-port 5000
@@ -212,11 +286,11 @@ npx kill-port 5000
 lsof -i :5000
 ```
 
-### 3. `listen tcp 0.0.0.0:5432: bind: address already in use`
+### 4. `listen tcp 0.0.0.0:5432: bind: address already in use`
 Your host machine has a native PostgreSQL service running on port 5432.
 - The included `docker-compose.yml` maps PostgreSQL to host port **`5433`** to avoid this issue automatically.
 - Alternatively, stop the local service: `sudo systemctl stop postgresql`.
 
-### 4. `404 Not Found` when running `npx serve`
+### 5. `404 Not Found` when running `npx serve`
 - If you are in the project root: run `npx serve frontend`
 - If you are already inside the `frontend/` folder: run `npx serve .`
