@@ -3,7 +3,25 @@
  * Connects to Node.js / Express backend with fallback to interactive local storage
  */
 
-const API_BASE = window.TASK_API_URL || 'http://localhost:5000/api';
+function getDefaultApiBase() {
+  if (typeof window !== 'undefined') {
+    // 1. Explicit overrides via window globals
+    if (window.TASK_API_URL) return window.TASK_API_URL;
+    if (window.ENV_API_URL) return window.ENV_API_URL;
+    if (window.API_URL) return window.API_URL;
+
+    // 2. Derive dynamically from current browser location
+    if (window.location && window.location.hostname) {
+      const { protocol, hostname } = window.location;
+      return `${protocol}//${hostname}:5000/api`;
+    }
+  }
+
+  // 3. Fallback
+  return 'http://localhost:5000/api';
+}
+
+let API_BASE = getDefaultApiBase();
 
 const DEFAULT_DEMO_TASKS = [
   {
@@ -46,6 +64,7 @@ const DEFAULT_DEMO_TASKS = [
 
 class TaskAPI {
   constructor() {
+    this.apiBase = API_BASE;
     this.isBackendOnline = false;
     this.initLocalStorage();
   }
@@ -65,20 +84,38 @@ class TaskAPI {
   }
 
   async checkHealth() {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-      const res = await fetch(`${API_BASE}/health`, { signal: controller.signal });
-      clearTimeout(timeoutId);
+    const candidateBases = [this.apiBase];
 
-      if (res.ok) {
-        const data = await res.json();
-        this.isBackendOnline = (data.database === 'connected');
-        return { online: true, database: data.database };
-      }
-    } catch (e) {
-      this.isBackendOnline = false;
+    if (typeof window !== 'undefined' && window.location) {
+      const { protocol, hostname } = window.location;
+      const directUrl = `${protocol}//${hostname}:5000/api`;
+      const relativeProxyUrl = '/api';
+
+      [directUrl, relativeProxyUrl].forEach(url => {
+        if (!candidateBases.includes(url)) candidateBases.push(url);
+      });
     }
+
+    for (const base of candidateBases) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch(`${base}/health`, { signal: controller.signal });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const data = await res.json();
+          this.apiBase = base;
+          API_BASE = base;
+          this.isBackendOnline = (data.database === 'connected');
+          return { online: true, database: data.database };
+        }
+      } catch (e) {
+        // Try next candidate
+      }
+    }
+
+    this.isBackendOnline = false;
     return { online: false, database: 'disconnected' };
   }
 
@@ -90,7 +127,7 @@ class TaskAPI {
         if (params.priority && params.priority !== 'all') query.append('priority', params.priority);
         if (params.search) query.append('search', params.search);
 
-        const res = await fetch(`${API_BASE}/tasks?${query.toString()}`);
+        const res = await fetch(`${this.apiBase}/tasks?${query.toString()}`);
         if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
         const result = await res.json();
         if (result.success && Array.isArray(result.data)) {
@@ -123,7 +160,7 @@ class TaskAPI {
   async createTask(taskData) {
     if (this.isBackendOnline) {
       try {
-        const res = await fetch(`${API_BASE}/tasks`, {
+        const res = await fetch(`${this.apiBase}/tasks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(taskData)
@@ -159,7 +196,7 @@ class TaskAPI {
   async updateTask(id, taskData) {
     if (this.isBackendOnline) {
       try {
-        const res = await fetch(`${API_BASE}/tasks/${id}`, {
+        const res = await fetch(`${this.apiBase}/tasks/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(taskData)
@@ -191,7 +228,7 @@ class TaskAPI {
   async patchStatus(id, status) {
     if (this.isBackendOnline) {
       try {
-        const res = await fetch(`${API_BASE}/tasks/${id}/status`, {
+        const res = await fetch(`${this.apiBase}/tasks/${id}/status`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status })
@@ -214,7 +251,7 @@ class TaskAPI {
   async deleteTask(id) {
     if (this.isBackendOnline) {
       try {
-        const res = await fetch(`${API_BASE}/tasks/${id}`, {
+        const res = await fetch(`${this.apiBase}/tasks/${id}`, {
           method: 'DELETE'
         });
         if (!res.ok) {
